@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ servico }} - Painel de Eventos</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        h1 {
+            color: #0056b3;
+            border-bottom: 2px solid #0056b3;
+            padding-bottom: 10px;
+        }
+        .container {
+            max-width: 900px;
+            margin: auto;
+        }
+        .evento {
+            background: #ffffff;
+            padding: 15px;
+            margin: 12px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 5px solid;
+        }
+        .evento.venda { border-color: #e74c3c; } /* Vermelho para venda */
+        .evento.reposicao { border-color: #2ecc71; } /* Verde para reposição */
+        .evento.ALTA { border-color: #f39c12; } /* Laranja para alerta */
+
+        .timestamp {
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 8px;
+        }
+        .contador {
+            background: #0056b3;
+            color: white;
+            padding: 12px 18px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+        }
+        strong {
+            color: #555;
+        }
+        pre {
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ servico }} - Painel de Eventos em Tempo Real</h1>
+        <div class="contador">Total de eventos processados: <span id="total">0</span></div>
+        <div id="eventos"></div>
+    </div>
+
+    <script>
+        function formatarJson(json_data) {
+            // Clona o objeto para não modificar o original
+            const data = { ...json_data };
+            // Remove campos que já são exibidos de forma destacada
+            delete data.timestamp;
+            delete data.tipo_operacao;
+            delete data.nome_produto;
+            delete data.severidade;
+            return JSON.stringify(data, null, 2);
+        }
+
+        function atualizarEventos() {
+            fetch('/api/eventos')
+                .then(response => response.json())
+                .then(eventos => {
+                    document.getElementById('total').textContent = eventos.length;
+                    const container = document.getElementById('eventos');
+
+                    container.innerHTML = eventos.map(e => {
+                        const tipo = e.tipo_operacao || e.severidade || 'default';
+
+                        return `
+                            <div class="evento ${tipo.toLowerCase()}">
+                                <div class="timestamp"><strong>Timestamp:</strong> ${new Date(e.timestamp).toLocaleString('pt-BR')}</div>
+                                <div><strong>Serviço de Origem:</strong> ${e.servico_origem || 'N/A'}</div>
+                                <div><strong>Tipo de Evento:</strong> ${tipo}</div>
+                                <div><strong>Produto:</strong> ${e.nome_produto || 'N/A'}</div>
+                                <pre>${formatarJson(e)}</pre>
+                            </div>
+                        `;
+                    }).join('');
+                })
+                .catch(error => console.error('Erro ao buscar eventos:', error));
+        }
+
+        // Atualiza a cada 2 segundos
+        setInterval(atualizarEventos, 2000);
+        // Chama a função imediatamente ao carregar a página
+        document.addEventListener('DOMContentLoaded', atualizarEventos);
+    </script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+version: '3.8'
+
+networks:
+  data-ingestion-network:
+    driver: bridge
+  monitoring-network:
+    driver: bridge
+  notification-network:
+    driver: bridge
+  kafka-network:
+    driver: bridge
+
+services:
+  # Base image with shared dependencies
+  base-image:
+    build:
+      context: ./docker-base-image
+      dockerfile: Dockerfile
+    image: estoque-ddi-base:latest
+    # This service only builds the image, it doesn't run
+    command: /bin/true
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper
+    networks:
+      - kafka-network
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka
+    networks:
+      - kafka-network
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  data-ingestion-service:
+    build:
+      context: ./data-ingestion-service
+      dockerfile: Dockerfile
+    container_name: data-ingestion-service
+    depends_on:
+      - base-image
+      - kafka
+    ports:
+      - "3001:3001"
+    networks:
+      - data-ingestion-network
+      - kafka-network
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+  monitoring-service:
+    build:
+      context: ./monitoring-service
+      dockerfile: Dockerfile
+    container_name: monitoring-service
+    depends_on:
+      - base-image
+      - kafka
+    ports:
+      - "3002:3002"
+    networks:
+      - monitoring-network
+      - kafka-network
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    depends_on:
+      - base-image
+      - kafka
+    ports:
+      - "3003:3003"
+    networks:
+      - notification-network
+      - kafka-network
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
