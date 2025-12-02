@@ -23,16 +23,16 @@ eventos_recentes = []
 # Lock para garantir acesso seguro às estruturas de dados compartilhadas entre threads.
 lock = Lock()
 # Limite crítico de estoque
-LIMITE_CRITICO = 10
+LIMITE_CRITICO = 15
 
 # --- Conexão com Kafka ---
 
-def conectar_kafka_com_retry(kafka_class, topic=None, max_tentativas=15, delay=5):
+def conectar_kafka_com_retry(kafka_class, topic=None, delay=5):
     """
-    Função genérica para conectar ao Kafka com múltiplas tentativas.
+    Função genérica para conectar ao Kafka indefinidamente.
     Funciona tanto para KafkaConsumer quanto para KafkaProducer.
     """
-    for tentativa in range(max_tentativas):
+    while True:
         try:
             if kafka_class == KafkaConsumer:
                 # Conexão para o Consumer
@@ -54,10 +54,11 @@ def conectar_kafka_com_retry(kafka_class, topic=None, max_tentativas=15, delay=5
             logger.info(f"Conexão com o Kafka ({kafka_class.__name__}) estabelecida com sucesso!")
             return client
         except NoBrokersAvailable:
-            logger.warning(f"Tentativa {tentativa + 1}/{max_tentativas} de conectar ao Kafka falhou. Tentando novamente em {delay}s...")
+            logger.warning(f"Falha ao conectar ao Kafka ({kafka_class.__name__}). Tentando novamente em {delay}s...")
             time.sleep(delay)
-    logger.error(f"Não foi possível conectar ao Kafka ({kafka_class.__name__}) após múltiplas tentativas.")
-    raise Exception(f"Não foi possível conectar ao Kafka como {kafka_class.__name__}")
+        except Exception as e:
+            logger.error(f"Erro inesperado ao conectar ao Kafka ({kafka_class.__name__}): {e}. Tentando novamente em {delay}s...")
+            time.sleep(delay)
 
 # --- Lógica do Serviço ---
 
@@ -66,60 +67,74 @@ def kafka_consumer_loop():
     Thread que consome eventos do tópico 'stock-updates', processa a lógica de negócio
     e publica alertas no tópico 'stock-alerts' se necessário.
     """
-    consumer = conectar_kafka_com_retry(KafkaConsumer, 'stock-updates')
-    producer = conectar_kafka_com_retry(KafkaProducer)
+    while True:
+        try:
+            logger.info("Tentando conectar ao consumidor...")
+            consumer = conectar_kafka_com_retry(KafkaConsumer, 'stock-updates')
+            logger.info("Consumidor conectado. Iniciando loop de mensagens...")
+            producer = conectar_kafka_com_retry(KafkaProducer)
+            logger.info("Produtor conectado.")
 
-    for mensagem in consumer:
-        evento = mensagem.value
-        logger.info(f"[MONITORING] Evento de estoque recebido: {evento}")
+            for mensagem in consumer:
+                logger.info(f"Mensagem crua recebida: {mensagem.value}")
+                try:
+                    evento = mensagem.value
+                    logger.info(f"[MONITORING] Evento de estoque recebido: {evento}")
 
-        produto_id = evento['produto_id']
-        tipo_operacao = evento['tipo_operacao']
-        quantidade = evento['quantidade']
+                    produto_id = evento['produto_id']
+                    tipo_operacao = evento['tipo_operacao']
+                    quantidade = evento['quantidade']
 
-        with lock:
-            # Pega o estoque atual ou define um valor inicial (ex: 50) se o produto for novo
-            estoque_atual = estoque_produtos.get(produto_id, 50)
+                    with lock:
+                        # Pega o estoque atual ou define um valor inicial (ex: 50) se o produto for novo
+                        estoque_atual = estoque_produtos.get(produto_id, 12)
 
-            # Atualiza o estoque com base na operação
-            if tipo_operacao == 'venda':
-                novo_estoque = estoque_atual - quantidade
-            elif tipo_operacao == 'reposicao':
-                novo_estoque = estoque_atual + quantidade
-            else:
-                novo_estoque = estoque_atual # Operação desconhecida, não altera o estoque
+                        # Atualiza o estoque com base na operação
+                        if tipo_operacao == 'venda':
+                            novo_estoque = estoque_atual - quantidade
+                        elif tipo_operacao == 'reposicao':
+                            novo_estoque = estoque_atual + quantidade
+                        else:
+                            novo_estoque = estoque_atual # Operação desconhecida, não altera o estoque
 
-            estoque_produtos[produto_id] = novo_estoque
-            logger.info(f"Estoque do produto '{produto_id}' atualizado para: {novo_estoque}")
+                        estoque_produtos[produto_id] = novo_estoque
+                        logger.info(f"Estoque do produto '{produto_id}' atualizado para: {novo_estoque}")
 
-            # Adiciona o evento de 'stock-updates' ao painel
-            evento['servico_origem'] = 'data-ingestion-service'
-            eventos_recentes.insert(0, evento)
+                        # Adiciona o evento de 'stock-updates' ao painel
+                        evento['servico_origem'] = 'data-ingestion-service'
+                        eventos_recentes.insert(0, evento)
 
-            # --- Regra de Negócio: Verificar se o estoque está abaixo do limite crítico ---
-            if novo_estoque < LIMITE_CRITICO:
-                alerta = {
-                    "produto_id": produto_id,
-                    "nome_produto": evento["nome_produto"],
-                    "estoque_atual": novo_estoque,
-                    "limite_critico": LIMITE_CRITICO,
-                    "severidade": "ALTA",
-                    "mensagem": f"Estoque crítico para {evento['nome_produto']}! Apenas {novo_estoque} unidades restantes.",
-                    "timestamp": datetime.now().isoformat()
-                }
+                        # --- Regra de Negócio: Verificar se o estoque está abaixo do limite crítico ---
+                        if novo_estoque < LIMITE_CRITICO:
+                            alerta = {
+                                "produto_id": produto_id,
+                                "nome_produto": evento["nome_produto"],
+                                "estoque_atual": novo_estoque,
+                                "limite_critico": LIMITE_CRITICO,
+                                "severidade": "ALTA",
+                                "mensagem": f"Estoque crítico para {evento['nome_produto']}! Apenas {novo_estoque} unidades restantes.",
+                                "timestamp": datetime.now().isoformat()
+                            }
 
-                # Publica o alerta no tópico 'stock-alerts'
-                producer.send('stock-alerts', alerta)
-                producer.flush()
-                logger.warning(f"[MONITORING] Alerta de estoque crítico gerado e publicado: {alerta}")
+                            # Publica o alerta no tópico 'stock-alerts'
+                            producer.send('stock-alerts', alerta)
+                            producer.flush()
+                            logger.warning(f"[MONITORING] Alerta de estoque crítico gerado e publicado: {alerta}")
 
-                # Adiciona o alerta gerado ao painel
-                alerta['servico_origem'] = 'monitoring-service'
-                eventos_recentes.insert(0, alerta)
+                            # Adiciona o alerta gerado ao painel
+                            alerta['servico_origem'] = 'monitoring-service'
+                            eventos_recentes.insert(0, alerta)
 
-            # Mantém a lista de eventos com no máximo 50 itens
-            if len(eventos_recentes) > 50:
-                eventos_recentes.pop()
+                        # Mantém a lista de eventos com no máximo 50 itens
+                        if len(eventos_recentes) > 50:
+                            eventos_recentes.pop()
+                except Exception as e:
+                    logger.error(f"Erro ao processar mensagem: {e}")
+                    # Continua para a próxima mensagem
+        
+        except Exception as e:
+            logger.error(f"Erro fatal na thread do consumidor: {e}. Reiniciando em 5s...")
+            time.sleep(5)
 
 # --- Rotas Flask ---
 

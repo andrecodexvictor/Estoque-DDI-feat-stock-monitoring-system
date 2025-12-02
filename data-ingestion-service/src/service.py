@@ -18,9 +18,9 @@ app = Flask(__name__)
 # Lista global para armazenar os últimos 50 eventos gerados por este serviço
 eventos_recentes = []
 
-def conectar_kafka_com_retry(max_tentativas=15, delay=5):
-    """Tenta conectar ao Kafka com múltiplas tentativas."""
-    for tentativa in range(max_tentativas):
+def conectar_kafka_com_retry(delay=5):
+    """Tenta conectar ao Kafka indefinidamente até conseguir."""
+    while True:
         try:
             producer = KafkaProducer(
                 bootstrap_servers='kafka:9092',
@@ -30,64 +30,71 @@ def conectar_kafka_com_retry(max_tentativas=15, delay=5):
             logger.info("Conexão com o Kafka estabelecida com sucesso!")
             return producer
         except NoBrokersAvailable:
-            logger.warning(f"Tentativa {tentativa + 1}/{max_tentativas} de conectar ao Kafka falhou. Tentando novamente em {delay}s...")
+            logger.warning(f"Falha ao conectar ao Kafka. Tentando novamente em {delay}s...")
             time.sleep(delay)
-    logger.error("Não foi possível conectar ao Kafka após múltiplas tentativas.")
-    raise Exception("Não foi possível conectar ao Kafka")
+        except Exception as e:
+            logger.error(f"Erro inesperado ao conectar ao Kafka: {e}. Tentando novamente em {delay}s...")
+            time.sleep(delay)
 
 def kafka_producer_loop():
     """
     Thread que simula a entrada de dados (vendas e reposições)
     e publica eventos no tópico 'stock-updates' do Kafka.
     """
-    producer = conectar_kafka_com_retry()
-
-    produtos = [
-        {"id": "PROD001", "nome": "Mouse Gamer RGB"},
-        {"id": "PROD002", "nome": "Teclado Mecânico"},
-        {"id": "PROD003", "nome": "Headset Gamer 7.1"},
-        {"id": "PROD004", "nome": "Monitor Ultrawide 29\""},
-        {"id": "PROD005", "nome": "Cadeira Gamer"},
-    ]
-
     while True:
         try:
-            produto = random.choice(produtos)
-            # Aumentar a probabilidade de vendas em relação a reposições
-            tipo_operacao = random.choice(["venda", "venda", "venda", "reposicao"])
-
-            if tipo_operacao == "venda":
-                quantidade = random.randint(1, 5) # Vendas em pequenas quantidades
-            else:
-                quantidade = random.randint(10, 30) # Reposições em grandes quantidades
-
-            # O evento representa a *alteração* no estoque
-            evento = {
-                "produto_id": produto["id"],
-                "nome_produto": produto["nome"],
-                "quantidade": quantidade, # Quantidade é sempre positiva, o tipo define a operação
-                "tipo_operacao": tipo_operacao,
-                "timestamp": datetime.now().isoformat()
-            }
-
-            # Envia o evento para o tópico 'stock-updates'
-            producer.send('stock-updates', evento)
-            producer.flush() # Garante que a mensagem foi enviada
-
-            # Adiciona o evento à lista de eventos recentes para exibição no painel
-            eventos_recentes.insert(0, evento)
-            if len(eventos_recentes) > 50:
-                eventos_recentes.pop()
-
-            logger.info(f"[DATA INGESTION] Evento publicado: {evento}")
-
-        except Exception as e:
-            logger.error(f"Erro ao publicar evento no Kafka: {e}")
-            # Tenta reconectar se houver um problema
             producer = conectar_kafka_com_retry()
 
-        # Aguarda um tempo aleatório antes de gerar o próximo evento
-        time.sleep(random.randint(3, 8))
+            produtos = [
+                {"id": "PROD001", "nome": "Mouse Gamer RGB"},
+                {"id": "PROD002", "nome": "Teclado Mecânico"},
+                {"id": "PROD003", "nome": "Headset Gamer 7.1"},
+                {"id": "PROD004", "nome": "Monitor Ultrawide 29\""},
+                {"id": "PROD005", "nome": "Cadeira Gamer"},
+            ]
+
+            while True:
+                try:
+                    produto = random.choice(produtos)
+                    # Aumentar a probabilidade de vendas em relação a reposições
+                    tipo_operacao = random.choice(["venda", "venda", "venda", "reposicao"])
+
+                    if tipo_operacao == "venda":
+                        quantidade = random.randint(1, 5) # Vendas em pequenas quantidades
+                    else:
+                        quantidade = random.randint(10, 30) # Reposições em grandes quantidades
+
+                    # O evento representa a *alteração* no estoque
+                    evento = {
+                        "produto_id": produto["id"],
+                        "nome_produto": produto["nome"],
+                        "quantidade": quantidade, # Quantidade é sempre positiva, o tipo define a operação
+                        "tipo_operacao": tipo_operacao,
+                        "timestamp": datetime.now().isoformat()
+                    }
+
+                    # Envia o evento para o tópico 'stock-updates'
+                    producer.send('stock-updates', evento)
+                    producer.flush() # Garante que a mensagem foi enviada
+
+                    # Adiciona o evento à lista de eventos recentes para exibição no painel
+                    eventos_recentes.insert(0, evento)
+                    if len(eventos_recentes) > 50:
+                        eventos_recentes.pop()
+
+                    logger.info(f"[DATA INGESTION] Evento publicado: {evento}")
+
+                    # Aguarda um tempo aleatório antes de gerar o próximo evento
+                    time.sleep(random.randint(3, 8))
+
+                except Exception as e:
+                    logger.error(f"Erro ao publicar evento no Kafka: {e}")
+                    # Sai do loop interno para tentar reconectar
+                    break
+        
+        except Exception as e:
+            logger.error(f"Erro fatal na thread do produtor: {e}. Reiniciando em 5s...")
+            time.sleep(5)
 
 @app.route('/panel')
 def panel():

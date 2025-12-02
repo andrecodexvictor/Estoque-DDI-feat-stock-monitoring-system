@@ -21,9 +21,9 @@ lock = Lock()
 
 # --- Conexão com Kafka ---
 
-def conectar_kafka_consumer_com_retry(topic, max_tentativas=15, delay=5):
-    """Tenta conectar um KafkaConsumer com múltiplas tentativas."""
-    for tentativa in range(max_tentativas):
+def conectar_kafka_consumer_com_retry(topic, delay=5):
+    """Tenta conectar um KafkaConsumer indefinidamente."""
+    while True:
         try:
             consumer = KafkaConsumer(
                 topic,
@@ -35,10 +35,11 @@ def conectar_kafka_consumer_com_retry(topic, max_tentativas=15, delay=5):
             logger.info(f"Conexão com o Kafka (Consumer) no tópico '{topic}' estabelecida com sucesso!")
             return consumer
         except NoBrokersAvailable:
-            logger.warning(f"Tentativa {tentativa + 1}/{max_tentativas} de conectar ao Kafka falhou. Tentando novamente em {delay}s...")
+            logger.warning(f"Falha ao conectar ao Kafka. Tentando novamente em {delay}s...")
             time.sleep(delay)
-    logger.error(f"Não foi possível conectar ao Kafka no tópico '{topic}' após múltiplas tentativas.")
-    raise Exception(f"Não foi possível conectar ao Kafka no tópico '{topic}'")
+        except Exception as e:
+            logger.error(f"Erro inesperado ao conectar ao Kafka: {e}. Tentando novamente em {delay}s...")
+            time.sleep(delay)
 
 # --- Lógica do Serviço ---
 
@@ -47,30 +48,40 @@ def kafka_consumer_loop():
     Thread que consome eventos de alerta do tópico 'stock-alerts'
     e os armazena para exibição no painel.
     """
-    consumer = conectar_kafka_consumer_com_retry('stock-alerts')
+    while True:
+        try:
+            consumer = conectar_kafka_consumer_com_retry('stock-alerts')
 
-    for mensagem in consumer:
-        alerta = mensagem.value
-        logger.info(f"[NOTIFICATION] Alerta de estoque recebido: {alerta}")
+            for mensagem in consumer:
+                try:
+                    alerta = mensagem.value
+                    logger.info(f"[NOTIFICATION] Alerta de estoque recebido: {alerta}")
 
-        with lock:
-            # Adiciona o alerta à lista de alertas recentes
-            alerta['servico_origem'] = 'monitoring-service'
-            alertas_recentes.insert(0, alerta)
+                    with lock:
+                        # Adiciona o alerta à lista de alertas recentes
+                        alerta['servico_origem'] = 'monitoring-service'
+                        alertas_recentes.insert(0, alerta)
 
-            # Mantém a lista com no máximo 50 alertas
-            if len(alertas_recentes) > 50:
-                alertas_recentes.pop()
+                        # Mantém a lista com no máximo 50 alertas
+                        if len(alertas_recentes) > 50:
+                            alertas_recentes.pop()
 
-            # Simulação de notificação: aqui poderia ser implementado o envio
-            # de um e-mail, SMS, ou uma chamada para outra API.
-            # Para este trabalho, apenas um log detalhado é suficiente.
-            logger.info("--- SIMULAÇÃO DE NOTIFICAÇÃO ---")
-            logger.info(f"  Tipo: Alerta de Estoque Crítico")
-            logger.info(f"  Produto: {alerta['nome_produto']} (ID: {alerta['produto_id']})")
-            logger.info(f"  Estoque Atual: {alerta['estoque_atual']} (Limite: {alerta['limite_critico']})")
-            logger.info(f"  Mensagem: {alerta['mensagem']}")
-            logger.info("---------------------------------")
+                        # Simulação de notificação: aqui poderia ser implementado o envio
+                        # de um e-mail, SMS, ou uma chamada para outra API.
+                        # Para este trabalho, apenas um log detalhado é suficiente.
+                        logger.info("--- SIMULAÇÃO DE NOTIFICAÇÃO ---")
+                        logger.info(f"  Tipo: Alerta de Estoque Crítico")
+                        logger.info(f"  Produto: {alerta['nome_produto']} (ID: {alerta['produto_id']})")
+                        logger.info(f"  Estoque Atual: {alerta['estoque_atual']} (Limite: {alerta['limite_critico']})")
+                        logger.info(f"  Mensagem: {alerta['mensagem']}")
+                        logger.info("---------------------------------")
+                except Exception as e:
+                    logger.error(f"Erro ao processar alerta: {e}")
+                    # Continua para a próxima mensagem
+
+        except Exception as e:
+            logger.error(f"Erro fatal na thread do consumidor: {e}. Reiniciando em 5s...")
+            time.sleep(5)
 
 # --- Rotas Flask ---
 
